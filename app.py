@@ -1,410 +1,487 @@
-# app.py
-# Role-based Creative Chatbot (English UI)
-# Streamlit web app with rich controls, presets, expandables, safe-text guardrails,
-# export/import of settings and transcripts, and multi-step creative "modes".
-#
-# NOTE: This app is fully local and does NOT call any external APIs.
-
-import json
+import streamlit as st
 import random
 import re
-import textwrap
 from datetime import datetime
-from typing import Dict, List
+from textwrap import shorten
 
-import streamlit as st
-
-# ----------------------------
+# -----------------------------
 # App Config
-# ----------------------------
+# -----------------------------
 st.set_page_config(
     page_title="Role-based Creative Chatbot",
     page_icon="🎭",
-    layout="wide"
+    layout="wide",
 )
 
-# Seed once for reproducibility across a session
-if "seed" not in st.session_state:
-    st.session_state.seed = random.randint(1, 10_000)
-random.seed(st.session_state.seed)
-
-# ----------------------------
+# -----------------------------
 # Utilities
-# ----------------------------
-def clamp(n, lo, hi):
-    return max(lo, min(hi, n))
+# -----------------------------
+def init_state():
+    if "history" not in st.session_state:
+        st.session_state.history = []  # list of dicts: {"role": "user/assistant/system", "content": str, "meta": dict}
+    if "seed" not in st.session_state:
+        st.session_state.seed = 42
+    if "rng" not in st.session_state:
+        st.session_state.rng = random.Random(st.session_state.seed)
+    if "active_role" not in st.session_state:
+        st.session_state.active_role = "Novelist"
+    if "system_persona" not in st.session_state:
+        st.session_state.system_persona = ""
 
-def split_sentences(text: str) -> List[str]:
-    parts = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [p for p in parts if p]
+def now_iso():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def stylize_text(text: str, device_pack: Dict[str, bool], role_voice: Dict[str, str], creativity: float) -> str:
-    """Apply literary devices and role-specific flavor in a deterministic-but-playful way."""
-    lines = split_sentences(text) or [text]
-    out = []
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
-    # device toggles
-    use_alliteration = device_pack.get("Alliteration", False)
-    use_metaphor = device_pack.get("Metaphor", False)
-    use_rule_of_three = device_pack.get("Rule of Three", False)
-    use_rhetorical_q = device_pack.get("Rhetorical Questions", False)
-    use_sensory = device_pack.get("Sensory Details", False)
-
-    # role tone hints
-    prefix = role_voice.get("prefix", "")
-    postfix = role_voice.get("postfix", "")
-    synonyms_boost = role_voice.get("synonyms", [])
-    cadence = role_voice.get("cadence", "neutral")
-
-    # Simple synonym substitution bank (kept small and safe)
-    base_synonyms = {
-        "good": ["solid", "compelling", "engaging", "persuasive"],
-        "great": ["remarkable", "outstanding", "stellar", "exceptional"],
-        "fast": ["swift", "rapid", "quick"],
-        "slow": ["unhurried", "measured", "gradual"],
-        "beautiful": ["elegant", "graceful", "stunning"],
-        "strong": ["robust", "resilient", "powerful"],
-        "simple": ["straightforward", "clean", "uncluttered"],
-        "complex": ["intricate", "multi-layered", "nuanced"],
-        "idea": ["concept", "angle", "approach", "direction"],
-        "story": ["narrative", "tale", "arc", "chronicle"],
-        "user": ["audience", "reader", "player", "viewer"]
-    }
-
-    # blend role synonyms
-    for k, vals in list(base_synonyms.items()):
-        if synonyms_boost:
-            base_synonyms[k] = list(dict.fromkeys(vals + synonyms_boost))
-
-    def maybe_synonym(word: str) -> str:
-        if random.random() > creativity:
-            return word
-        key = word.lower()
-        if key in base_synonyms:
-            choice = random.choice(base_synonyms[key])
-            return choice if word.islower() else choice.capitalize()
-        return word
-
-    def device_alliteration(sentence: str) -> str:
-        if not use_alliteration:
-            return sentence
-        # pick a letter and try to alliterate beginning words
-        letter = random.choice(list("bcdfghjklmnpqrstvwxyz"))
-        words = sentence.split()
-        for i in range(min(3, len(words))):
-            if len(words[i]) > 3:
-                words[i] = f"{letter}{words[i][1:]}"
-        return " ".join(words)
-
-    def device_metaphor(sentence: str) -> str:
-        if not use_metaphor or len(sentence) < 10:
-            return sentence
-        metaphors = [
-            "like a compass in a crowded bazaar",
-            "as if stitched from midnight and neon",
-            "like a lighthouse cutting fog",
-            "as steady as a heartbeat drum",
-            "like sparks skipping across water"
-        ]
-        if random.random() < creativity:
-            return sentence + " " + random.choice(metaphors) + "."
-        return sentence
-
-    def device_rule_of_three(sentence: str) -> str:
-        if not use_rule_of_three:
-            return sentence
-        # append a triad if short
-        triads = [
-            "clarity, momentum, and intent",
-            "setup, escalation, and payoff",
-            "hook, heart, and hindsight",
-            "discover, design, and deliver"
-        ]
-        if len(sentence) < 140 and random.random() < 0.6:
-            return sentence.rstrip(".") + f" — {random.choice(triads)}."
-        return sentence
-
-    def device_rhetorical(sentence: str) -> str:
-        if not use_rhetorical_q or len(sentence) < 40:
-            return sentence
-        qs = [
-            "What if we leaned into the tension?",
-            "Is there a sharper hook we can try?",
-            "What would delight the audience the most?"
-        ]
-        if random.random() < creativity * 0.7:
-            return sentence + " " + random.choice(qs)
-        return sentence
-
-    def device_sensory(sentence: str) -> str:
-        if not use_sensory:
-            return sentence
-        spices = [
-            "You can almost hear the soft hum beneath it.",
-            "You can feel the cool edge of the idea in your palm.",
-            "There’s a citrus brightness in the momentum.",
-            "It carries the warm grain of daylight."
-        ]
-        if random.random() < creativity * 0.5:
-            return sentence + " " + random.choice(spices)
-        return sentence
-
-    # cadence
-    def apply_cadence(text: str) -> str:
-        if cadence == "punchy":
-            return re.sub(r',', ' —', text)
-        elif cadence == "lyrical":
-            return text.replace(".", ".")
-        return text
-
-    for s in lines:
-        # synonym pass
-        words = re.findall(r"\w+|[^\w\s]", s, re.UNICODE)
-        words = [maybe_synonym(w) if w.isalpha() else w for w in words]
-        s2 = "".join([w if re.match(r"[^\w\s]", w) else (" " + w if i else w) for i, w in enumerate(words)])
-        # devices
-        s2 = device_alliteration(s2)
-        s2 = device_metaphor(s2)
-        s2 = device_rule_of_three(s2)
-        s2 = device_rhetorical(s2)
-        s2 = device_sensory(s2)
-        s2 = apply_cadence(s2)
-        out.append(s2)
-
-    text = " ".join(out)
-    text = (prefix + " " + text + " " + postfix).strip()
+def maybe_bulletize(text, line_max=140):
+    # Light bulletizer if the text looks like a list prompt
+    items = re.split(r"[;\n]+", text.strip())
+    items = [i.strip() for i in items if i.strip()]
+    if len(items) >= 3 and all(len(i) <= line_max for i in items):
+        return "\n".join([f"- {i}" for i in items])
     return text
 
-def safety_guard(text: str) -> bool:
-    """Simple guardrail to refuse unsafe categories; extend as needed."""
-    blocked = [
-        r"\bviolence\b", r"\bself[-\s]?harm\b", r"\bsuicide\b",
-        r"\bterror\b", r"\bexplosive\b", r"\bhate\b"
-    ]
-    for pat in blocked:
-        if re.search(pat, text, flags=re.I):
-            return False
-    return True
-
-def clean_prompt(s: str) -> str:
-    return re.sub(r"\s+", " ", s).strip()
-
-# ----------------------------
-# Roles & Modes
-# ----------------------------
-ROLE_LIBRARY: Dict[str, Dict] = {
-    "Screenwriter": {
-        "desc": "Structure scenes, beats, and dialogue with cinematic pacing.",
-        "voice": {"prefix": "INT. CREATIVE STUDIO — DAY.", "postfix": "", "synonyms": ["scene", "beat", "stakes"], "cadence": "punchy"},
+# -----------------------------
+# Role Catalog & Behaviors
+# -----------------------------
+ROLE_DEFS = {
+    "Novelist": {
+        "style": "vivid imagery, character-driven, varied sentence length, occasional metaphor",
+        "tools": ["Outline", "Beat Sheet", "Character Sketch", "Plot Twist"],
+        "tones": ["Warm", "Dark", "Epic", "Whimsical", "Bittersweet"],
     },
-    "Marketing Strategist": {
-        "desc": "Positioning, value props, and copy that converts without fluff.",
-        "voice": {"prefix": "From a strategist’s desk:", "postfix": "Let’s move.", "synonyms": ["conversion", "resonance", "friction"], "cadence": "neutral"},
+    "Poet": {
+        "style": "lyrical, compressed imagery, attention to rhythm and sound",
+        "tools": ["Haiku", "Free Verse", "Pantoum-ish", "Ekphrasis"],
+        "tones": ["Tender", "Melancholic", "Playful", "Surreal"],
+    },
+    "Screenwriter": {
+        "style": "cinematic, visual blocking, dialog-forward, sluglines",
+        "tools": ["Logline", "Beat Sheet", "Scene", "Dialogue Polish"],
+        "tones": ["Gritty", "Witty", "High-stakes", "Deadpan"],
+    },
+    "Game Master": {
+        "style": "interactive narration, second-person cues, crunchy details, hooks",
+        "tools": ["World Builder", "Encounter", "Item Generator", "NPC"],
+        "tones": ["Heroic", "Cozy", "Horror", "Sword & Sorcery"],
+    },
+    "Marketer": {
+        "style": "benefit-led, crisp copy, CTA-aware, audience targeting",
+        "tools": ["Tagline", "Value Props", "Landing Section", "Ad Variants"],
+        "tones": ["Bold", "Trustworthy", "Friendly", "Premium"],
     },
     "UX Writer": {
-        "desc": "Microcopy and flows that reduce friction and increase clarity.",
-        "voice": {"prefix": "On-screen guidance:", "postfix": "", "synonyms": ["clarity", "flow", "coherence"], "cadence": "punchy"},
+        "style": "clear, concise, helpful, inclusive, action-oriented",
+        "tools": ["Microcopy", "Empty State", "Onboarding", "Error Message"],
+        "tones": ["Reassuring", "Neutral", "Upbeat", "Expert"],
     },
-    "Children’s Author": {
-        "desc": "Gentle rhythms, bright images, and friendly wonder.",
-        "voice": {"prefix": "Once upon a soft morning,", "postfix": "", "synonyms": ["friend", "giggle", "wonder"], "cadence": "lyrical"},
+    "Teacher": {
+        "style": "scaffolding, analogies, step-by-step, Socratic prompts",
+        "tools": ["Lesson Plan", "Explain Like I'm 5", "Quiz", "Assignment"],
+        "tones": ["Encouraging", "Rigorous", "Patient", "Curious"],
     },
-    "Sci-Fi Worldbuilder": {
-        "desc": "Big ideas, lived-in details, and plausible systems.",
-        "voice": {"prefix": "In a near-future skyline,", "postfix": "", "synonyms": ["protocol", "orbit", "biosphere"], "cadence": "neutral"},
-    },
-    "Poet Laureate": {
-        "desc": "Concise imagery, sonic texture, and layered meaning.",
-        "voice": {"prefix": "", "postfix": "", "synonyms": ["lilt", "cadence", "echo"], "cadence": "lyrical"},
-    },
-    "Game Narrative Designer": {
-        "desc": "Quests, lore, and choice consequences with playful hooks.",
-        "voice": {"prefix": "Quest Log Update:", "postfix": "", "synonyms": ["quest", "faction", "artifact"], "cadence": "punchy"},
+    "Comedian": {
+        "style": "observational, misdirection, call-backs, rhythm",
+        "tools": ["One-liners", "Premise → Punchline", "Roast (wholesome)", "Sketch idea"],
+        "tones": ["Deadpan", "Absurd", "Self-deprecating", "Satirical"],
     },
     "Data Storyteller": {
-        "desc": "Turn numbers into narrative arcs and human insights.",
-        "voice": {"prefix": "From the dataset:", "postfix": "", "synonyms": ["signal", "variance", "pattern"], "cadence": "neutral"},
-    },
-    "Motivational Coach": {
-        "desc": "Supportive, actionable, forward energy (wellbeing-safe).",
-        "voice": {"prefix": "You’ve got this.", "postfix": "One focused step at a time.", "synonyms": ["momentum", "commitment", "progress"], "cadence": "punchy"},
-    },
-    "Stand-up Comedian (clean)": {
-        "desc": "Light observational humor with clean language.",
-        "voice": {"prefix": "So get this:", "postfix": "", "synonyms": ["bit", "riff", "callback"], "cadence": "punchy"},
+        "style": "insight-first, narrative arc, chart suggestions, comparisons",
+        "tools": ["Hook", "Executive Summary", "Slide Outline", "Headline Variants"],
+        "tones": ["Neutral", "Optimistic", "Urgent", "Balanced"],
     },
 }
 
-CREATIVE_MODES = {
-    "Brainstorm": "Generate many short ideas with tags.",
-    "Outline": "Produce a structured outline (I/II/III).",
-    "Draft": "Write a coherent draft with sections.",
-    "Rewrite": "Rewrite input text in the selected role.",
-    "Summarize": "Summarize and highlight action points."
-}
+# Built-in “plugins”: small, deterministic creative helpers
+def plugin_world_builder(rng, theme, detail):
+    seeds = [
+        f"A wind-worn port city built on basalt cliffs, famous for {detail} and markets that open before dawn.",
+        f"A floating archipelago of libraries where knowledge is taxed in hours of sleep—{detail} is the black market.",
+        f"A subterranean orchard lit by bioluminescent vines; {detail} is a rite of passage.",
+        f"A desert monastery whose bells summon rain; {detail} is carved into every threshold.",
+    ]
+    return rng.choice(seeds).replace("{detail}", theme)
 
-OUTPUT_FORMS = ["General prose", "Taglines", "Bullet list", "Poem", "Microcopy", "Ad copy", "Social thread", "Pitch paragraph"]
+def plugin_character_forge(rng, occupation, flaw):
+    traits = ["meticulous", "mercurial", "stoic", "improvisational", "soft-spoken", "incorrigibly curious"]
+    hooks = [
+        "owes a life-debt to a rival",
+        "collects forbidden maps",
+        "cannot cross bridges at dawn",
+        "writes letters to a future self",
+        "savors silence like tea",
+    ]
+    return f"{rng.choice(traits)} {occupation} who {rng.choice(hooks)}; main flaw: {flaw}."
 
-DEVICE_OPTIONS = ["Alliteration", "Metaphor", "Rule of Three", "Rhetorical Questions", "Sensory Details"]
+def plugin_plot_twist(rng):
+    twists = [
+        "The mentor is a decoy; the real guide has been the antagonist’s diary.",
+        "The map is a memory palace—whoever holds it forgets what they love.",
+        "The prophecy was a product roadmap; the ‘chosen one’ is a usability test.",
+        "The monster is hibernating under the city’s music hall.",
+        "The priceless artifact is a replica; the box is the real treasure.",
+    ]
+    return rng.choice(twists)
 
-LENGTH_MAP = {
-    "Very short": (60, 100),
-    "Short": (120, 200),
-    "Medium": (220, 400),
-    "Long": (500, 800)
-}
+def plugin_scamper(rng, topic):
+    frames = [
+        ("Substitute", f"What if {topic} were replaced with its opposite?"),
+        ("Combine", f"What if {topic} merged with a daily ritual?"),
+        ("Adapt", f"What can we borrow from aviation for {topic}?"),
+        ("Modify", f"If we exaggerate one property of {topic}, what breaks first?"),
+        ("Put to other use", f"Where could {topic} work in a hospital?"),
+        ("Eliminate", f"What happens if we remove onboarding from {topic}?"),
+        ("Reverse", f"What if {topic} starts at the end and works backward?"),
+    ]
+    rng.shuffle(frames)
+    return "\n".join([f"- **{k}:** {v}" for k, v in frames])
 
-# ----------------------------
-# Sidebar Controls
-# ----------------------------
-with st.sidebar:
-    st.header("Choose a Role 🎭")
-    role_name = st.selectbox("Role", list(ROLE_LIBRARY.keys()), index=1, help="Select a creative persona.")
+def plugin_haiku(rng, theme):
+    line1 = rng.choice(["Autumn traffic hums", "Glass rivers at dawn", "Sunlit code unfolds"])
+    line2 = rng.choice([f"{theme} in a teacup storm", f"footnotes of the sky", f"quiet commits bloom"])
+    line3 = rng.choice(["we learn to wait well", "pixels breathe like moss", "wind signs the release"])
+    return f"{line1}\n{line2}\n{line3}"
 
-    st.header("Creative Mode 🧪")
-    mode_name = st.selectbox("Mode", list(CREATIVE_MODES.keys()), index=0, help=CREATIVE_MODES)
-
-    st.header("Output Controls 🛠️")
-    out_form = st.selectbox("Output form", OUTPUT_FORMS, index=0)
-    length_label = st.selectbox("Length", list(LENGTH_MAP.keys()), index=2)
-    min_chars, max_chars = LENGTH_MAP[length_label]
-    creativity = st.slider("Creativity (0 = literal, 1 = wild)", 0.0, 1.0, 0.55, 0.05)
-    temperature = st.slider("Variety (higher = more varied phrasing)", 0.0, 1.0, 0.5, 0.05)
-
-    st.header("Constraints & Audience 🎯")
-    target_audience = st.text_input("Target audience (optional)", value="general audience")
-    required_keywords = st.text_input("Required keywords (comma-separated)", value="")
-    taboo_words = st.text_input("Banned words (comma-separated)", value="")
-    pov = st.selectbox("Point of view", ["First person", "Second person", "Third person"], index=1)
-
-    st.header("Style Devices ✨")
-    device_pack = {}
-    for opt in DEVICE_OPTIONS:
-        device_pack[opt] = st.checkbox(opt, value=(opt in ["Metaphor", "Rule of Three"]))
-
-    st.header("Advanced 🔧")
-    wrap_width = st.number_input("Wrap width (characters)", min_value=60, max_value=140, value=100, step=2)
-    max_ideas = st.slider("Idea count (Brainstorm)", 3, 12, 6, 1)
-    bullet_prefix = st.text_input("Bullet prefix", value="• ")
-
-    st.header("Presets & Export 📦")
-    colA, colB = st.columns(2)
-    with colA:
-        export_btn = st.button("Export Settings", use_container_width=True)
-    with colB:
-        export_chat_btn = st.button("Export Transcript", use_container_width=True)
-    imported = st.file_uploader("Import settings (.json)", type=["json"])
-
-# ----------------------------
-# Session State
-# ----------------------------
-if "transcript" not in st.session_state:
-    st.session_state.transcript = []
-
-def add_turn(role: str, user: str, bot: str):
-    st.session_state.transcript.append({
-        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "role": role,
-        "user": user,
-        "bot": bot
-    })
-
-# Handle exports
-if export_btn:
-    cfg = {
-        "role_name": role_name,
-        "mode_name": mode_name,
-        "out_form": out_form,
-        "length_label": length_label,
-        "creativity": creativity,
-        "temperature": temperature,
-        "target_audience": target_audience,
-        "required_keywords": required_keywords,
-        "taboo_words": taboo_words,
-        "pov": pov,
-        "device_pack": device_pack,
-        "wrap_width": wrap_width,
-        "max_ideas": max_ideas,
-        "bullet_prefix": bullet_prefix,
-        "seed": st.session_state.seed
+def plugin_taglines(rng, product, tone):
+    starts = {
+        "Bold": ["Own the moment.", "Make noise.", "Be unmistakable."],
+        "Friendly": ["Hello, easy.", "Nice to meet better.", "Small steps, big smiles."],
+        "Premium": ["Simply elevated.", "Crafted to last.", "Rarer. Smarter. Yours."],
+        "Trustworthy": ["Built on better.", "Count on clarity.", "Because details matter."],
+        "Neutral": ["Do more with less.", "Made to work.", "It just helps."],
     }
-    st.download_button(
-        label="Download settings.json",
-        data=json.dumps(cfg, indent=2),
-        file_name="settings.json",
-        mime="application/json"
+    lines = starts.get(tone, starts["Neutral"])
+    add = [
+        f"{product}, without the hassle.",
+        f"{product} that feels like tomorrow.",
+        f"{product}—because time is the real luxury.",
+    ]
+    rng.shuffle(add)
+    return "\n".join([rng.choice(lines), add[0]])
+
+# -----------------------------
+# Generation Core (deterministic-ish)
+# -----------------------------
+def generate_creative_reply(
+    rng,
+    role,
+    user_text,
+    tone="Neutral",
+    length="Medium",
+    structure="Auto",
+    constraints=None,
+    persona_notes="",
+    style_guide="",
+    temperature=0.5,
+    allow_lists=True,
+):
+    """
+    A lightweight, deterministic creative engine (no external APIs).
+    Uses templates + shuffling + plugins to transform input into role-flavored output.
+    """
+    constraints = constraints or []
+    words = user_text.strip()
+    if not words:
+        words = "Create something delightful about nothing in particular."
+
+    # Base envelope by role
+    flavor = ROLE_DEFS.get(role, ROLE_DEFS["Novelist"])
+    style = flavor["style"]
+
+    # Token-ish shuffler to mimic temperature
+    tok = re.split(r"(\s+)", words)
+    k = clamp(int(len(tok) * (temperature * 0.25)), 0, max(0, len(tok) - 1))
+    if k > 2:
+        rng.shuffle(tok[:k])
+    remixed = "".join(tok).strip()
+
+    # Length control
+    length_map = {
+        "Very Short": (40, 80),
+        "Short": (80, 140),
+        "Medium": (140, 220),
+        "Long": (220, 400),
+        "Very Long": (400, 800),
+    }
+    lo, hi = length_map.get(length, (140, 220))
+
+    # Structure selection
+    structures = {
+        "Auto": ["Paragraph", "Bulleted", "Outline"],
+        "Paragraph": ["Paragraph"],
+        "Bulleted": ["Bulleted"],
+        "Outline": ["Outline"],
+        "Dialogue": ["Dialogue"],
+        "Scene": ["Scene"],
+    }
+    chosen_struct = rng.choice(structures.get(structure, ["Paragraph"]))
+
+    # Compose header
+    header = f"**Role:** {role}  •  **Tone:** {tone}  •  **Style:** {style}"
+    if persona_notes:
+        header += f"\n**Persona notes:** {persona_notes}"
+    if constraints:
+        header += f"\n**Constraints:** {', '.join(constraints)}"
+    if style_guide:
+        header += f"\n**Style Guide:** {shorten(style_guide, width=140, placeholder='…')}"
+
+    # Body builders per structure
+    def build_paragraph():
+        body = (
+            f"In a {tone.lower()} register, consider this: {remixed}. "
+            f"Focus on clarity and momentum. Add sensory detail when helpful, avoid filler. "
+            f"Keep {role.lower()} conventions in mind."
+        )
+        if allow_lists and rng.random() < 0.25:
+            body += "\n\nKey beats:\n- Setup\n- Turn\n- Payoff"
+        return body
+
+    def build_bulleted():
+        base = maybe_bulletize(remixed)
+        lines = base.splitlines()
+        bullets = []
+        for ln in lines:
+            ln = ln.strip(" -")
+            if ln:
+                bullets.append(f"- {ln}")
+        if not bullets:
+            bullets = [f"- {remixed}"]
+        bullets += ["- Tension rises", "- A choice must be made", "- Consequence lands"]
+        return "\n".join(bullets)
+
+    def build_outline():
+        return "\n".join(
+            [
+                "I. Hook — an image or a promise",
+                f"II. Context — {remixed}",
+                "III. Complication — stakes sharpen",
+                "IV. Decision — irreversible choice",
+                "V. Outcome — satisfying yet open",
+            ]
+        )
+
+    def build_dialogue():
+        return "\n".join(
+            [
+                "A: I thought the plan was simple.",
+                f"B: It was, until {remixed}.",
+                "A: Then we improvise.",
+                "B: That’s not improvisation; that’s honesty with a deadline.",
+            ]
+        )
+
+    def build_scene():
+        return "\n".join(
+            [
+                "INT. QUIET ROOM – EVENING",
+                f"Soft light. A notebook open. On the page: “{remixed}”.",
+                "A kettle clicks. Someone exhales like a page turning.",
+                "They underline a word, not to cage it—just to notice.",
+            ]
+        )
+
+    builders = {
+        "Paragraph": build_paragraph,
+        "Bulleted": build_bulleted,
+        "Outline": build_outline,
+        "Dialogue": build_dialogue,
+        "Scene": build_scene,
+    }
+    body = builders.get(chosen_struct, build_paragraph)()
+
+    # Enforce approximate length by additive padding/trim
+    if len(body) < lo:
+        pad = " " + " ".join(
+            rng.choice(
+                [
+                    "Add a tangible detail.",
+                    "Offer a contrast.",
+                    "Use a sharp verb.",
+                    "Tighten the rhythm.",
+                    "Name what changes.",
+                ]
+            )
+            for _ in range(max(1, (lo - len(body)) // 24))
+        )
+        body += pad
+    elif len(body) > hi:
+        body = body[:hi] + "…"
+
+    return header + "\n\n" + body
+
+# -----------------------------
+# Sidebar — Controls
+# -----------------------------
+init_state()
+
+with st.sidebar:
+    st.header("🎭 Choose a role")
+    role = st.selectbox("Role", list(ROLE_DEFS.keys()), index=list(ROLE_DEFS.keys()).index(st.session_state.active_role))
+    st.session_state.active_role = role
+
+    st.markdown("**Tone**")
+    tone = st.select_slider("Pick a tone", options=ROLE_DEFS[role]["tones"], value=ROLE_DEFS[role]["tones"][0])
+
+    st.markdown("**Structure**")
+    structure = st.selectbox(
+        "Preferred structure",
+        ["Auto", "Paragraph", "Bulleted", "Outline", "Dialogue", "Scene"],
+        index=0
     )
 
-if export_chat_btn:
-    text_dump = []
-    for t in st.session_state.transcript:
-        text_dump.append(f"[{t['time']}] ROLE={t['role']}\nUSER: {t['user']}\nBOT: {t['bot']}\n")
-    st.download_button(
-        label="Download transcript.txt",
-        data="\n".join(text_dump),
-        file_name="transcript.txt",
-        mime="text/plain"
-    )
+    st.markdown("**Length**")
+    length = st.select_slider("Target length", options=["Very Short", "Short", "Medium", "Long", "Very Long"], value="Medium")
 
-if imported is not None:
-    try:
-        cfg = json.load(imported)
-        # Soft-apply: show as info (safer than hot-overwriting widgets mid-run)
-        st.success("Settings imported. Please re-select values to mirror imported config:")
-        st.json(cfg, expanded=False)
-    except Exception as e:
-        st.error(f"Failed to import: {e}")
+    st.markdown("**Advanced**")
+    temperature = st.slider("Creativity (pseudo temperature)", 0.0, 1.0, 0.55, 0.05)
+    allow_lists = st.checkbox("Allow list inserts / beats", True)
+    memory_on = st.checkbox("Conversation memory (use previous turns)", True)
+    st.session_state.seed = st.number_input("Random seed (deterministic runs)", min_value=0, value=42, step=1)
+    st.session_state.rng = random.Random(st.session_state.seed)
 
-# ----------------------------
-# Main UI
-# ----------------------------
+    st.markdown("---")
+    st.subheader("🧩 Plugins")
+    colp1, colp2 = st.columns(2)
+    with colp1:
+        wb_enabled = st.checkbox("World Builder", False)
+        char_enabled = st.checkbox("Character Forge", False)
+        twist_enabled = st.checkbox("Plot Twist", False)
+    with colp2:
+        scamper_enabled = st.checkbox("SCAMPER Ideation", False)
+        haiku_enabled = st.checkbox("Haiku", False)
+        tagline_enabled = st.checkbox("Taglines", False)
+
+    st.markdown("---")
+    st.subheader("✍️ Persona & Style")
+    persona_notes = st.text_area("Persona notes (voice, audience, POV)", "")
+    style_guide = st.text_area("Style guide (do/don’t, terminology)", "")
+
+    st.markdown("---")
+    st.subheader("🔎 Prompt inspector")
+    show_inspector = st.checkbox("Show composed system/context prompt", False)
+
+    st.markdown("---")
+    st.subheader("⬇️ Export")
+    if st.session_state.history:
+        transcript = "\n".join(
+            f"[{h['meta'].get('ts','')}] {h['role'].upper()}: {h['content']}"
+            for h in st.session_state.history
+        ).encode("utf-8")
+        st.download_button("Download conversation (.txt)", transcript, "chat_transcript.txt", "text/plain")
+
+# -----------------------------
+# Main Header
+# -----------------------------
 st.title("Role-based Creative Chatbot")
-st.caption("Pick a role, choose a mode, and craft nuanced creative outputs—right in your browser.")
+st.caption("A detailed, extensible creative assistant with role selection, plugins, persona controls, and safe offline generation.")
 
-colL, colR = st.columns([1, 2])
-
-with colL:
-    st.markdown("### Prompt")
-    user_prompt = st.text_area(
-        "Describe what you want:",
-        height=160,
-        placeholder="E.g., Launch announcement for a minimalist note-taking app focused on calm productivity."
+# Instruction card
+with st.expander("What can this do?", expanded=True):
+    st.markdown(
+        """
+**Pick a role** in the sidebar, set a tone/structure/length, tweak creativity, then chat below.  
+Enable **plugins** (World Builder, Character Forge, Plot Twist, SCAMPER, Haiku, Taglines) for extra flavor.  
+Use **Persona & Style** to shape the voice; turn on **Conversation memory** to let replies build on prior turns.
+        """
     )
-    run = st.button("Generate", type="primary", use_container_width=True)
 
-with colR:
-    st.markdown("### About this Role")
-    st.write(f"**{role_name}** — {ROLE_LIBRARY[role_name]['desc']}")
-    st.markdown(f"**Mode:** {mode_name} · **Form:** {out_form} · **Length:** {length_label}")
-    st.info("Tip: use the left panel to tune creativity, devices, audience, and constraints. Export your settings or transcript any time.")
+# -----------------------------
+# Prompt Inspector (shows context)
+# -----------------------------
+if show_inspector:
+    sys_preview = f"""SYSTEM CONTEXT
+Role: {role}
+Tone: {tone}
+Structure: {structure}
+Length: {length}
+Temperature: {temperature}
+Allow Lists: {allow_lists}
+Persona Notes: {persona_notes or "(none)"}
+Style Guide: {style_guide or "(none)"}
+Plugins: {", ".join([p for p, on in [
+    ("World Builder", wb_enabled), ("Character Forge", char_enabled), ("Plot Twist", twist_enabled),
+    ("SCAMPER", scamper_enabled), ("Haiku", haiku_enabled), ("Taglines", tagline_enabled)] if on]) or "(none)"}"""
+    st.code(sys_preview, language="markdown")
 
+# -----------------------------
+# Chat Area
+# -----------------------------
+chat_container = st.container()
+
+# Display history
+with chat_container:
+    for h in st.session_state.history:
+        with st.chat_message(h["role"]):
+            st.markdown(h["content"])
+
+# User input
+user_input = st.chat_input("Type your prompt (e.g., 'Write an opening scene on a rainy spaceport')")
+
+def build_memory_prefix():
+    """Lightweight summary of recent conversation to simulate memory."""
+    if not st.session_state.history:
+        return ""
+    # Use last 4 exchanges
+    recent = st.session_state.history[-8:]
+    lines = []
+    for h in recent:
+        tag = "U" if h["role"] == "user" else "A"
+        lines.append(f"{tag}: {shorten(h['content'], width=120, placeholder='…')}")
+    return "Conversation memory:\n" + "\n".join(lines) + "\n\n"
+
+if user_input:
+    # Record user turn
+    st.session_state.history.append({"role": "user", "content": user_input, "meta": {"ts": now_iso(), "role": role}})
+
+    # Compose extra plugin outputs
+    rng = st.session_state.rng
+    plugin_bits = []
+
+    if wb_enabled:
+        plugin_bits.append("**World Builder:** " + plugin_world_builder(rng, theme=user_input, detail="ancient trade routes"))
+    if char_enabled:
+        plugin_bits.append("**Character Forge:** " + plugin_character_forge(rng, occupation="smuggler-archivist", flaw="impatient with ambiguity"))
+    if twist_enabled:
+        plugin_bits.append("**Plot Twist:** " + plugin_plot_twist(rng))
+    if scamper_enabled:
+        plugin_bits.append("**SCAMPER:**\n" + plugin_scamper(rng, topic=user_input))
+    if haiku_enabled:
+        plugin_bits.append("**Haiku:**\n" + plugin_haiku(rng, theme=user_input))
+    if tagline_enabled:
+        plugin_bits.append("**Taglines:**\n" + plugin_taglines(rng, product=user_input, tone=tone))
+
+    plugin_section = "\n\n".join(plugin_bits)
+
+    # Memory prefix
+    prefix = build_memory_prefix() if memory_on else ""
+
+    # Generate reply
+    reply = generate_creative_reply(
+        rng=rng,
+        role=role,
+        user_text=prefix + user_input,
+        tone=tone,
+        length=length,
+        structure=structure,
+        constraints=[],
+        persona_notes=persona_notes,
+        style_guide=style_guide,
+        temperature=temperature,
+        allow_lists=allow_lists,
+    )
+
+    if plugin_section:
+        reply = reply + "\n\n---\n" + plugin_section
+
+    # Append assistant turn
+    st.session_state.history.append({"role": "assistant", "content": reply, "meta": {"ts": now_iso(), "role": role}})
+
+    # Display immediately
+    with chat_container:
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
+# Footer
 st.markdown("---")
-
-# ----------------------------
-# Core Generation (local, deterministic-ish)
-# ----------------------------
-def apply_constraints(text: str, req_kw: str, taboo: str) -> str:
-    # Ensure required keywords appear; if not, weave them in at the end.
-    musts = [k.strip() for k in req_kw.split(",") if k.strip()]
-    bans = [b.strip().lower() for b in taboo.split(",") if b.strip()]
-    base = text
-
-    if musts:
-        missing = [m for m in musts if re.search(re.escape(m), base, re.I) is None]
-        if missing:
-            base += "\n\nRequired notes: " + "; ".join(missing) + "."
-    if bans:
-        for b in bans:
-            base = re.sub(fr"\b{re.escape(b)}\b", "[redacted]", base, flags=re.I)
-    return base
-
-def pov_transform(text: str, pov_choice: str) -> str:
-    # Lightweight POV tweak; (doesn't rewrite pronouns perfectly, just adds perspective framing)
-    if pov_choice == "First person":
-        return "From my perspective: " + text
-    if pov_choice == "Second person":
-        return "For you, consider this: " + text
-    return text  # Third person neutral
-
-def brainstorm_blocks(topic: str, ideas: int, role_voice, form, bullet_prefix: str) -> str:
-    pool_tags = ["hook", "angle", "tension", "benefit", "tw
+st.caption("This app uses deterministic templates and randomization (no external APIs), so it runs anywhere Streamlit runs.")
