@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, render_template_string
 import random
 import textwrap
-import json
 
 app = Flask(__name__)
 
@@ -77,26 +76,19 @@ ROLES = {
 
 TONES = ["Friendly", "Professional", "Playful", "Dramatic", "Inspiring", "Neutral"]
 FORMATS = ["Paragraph", "Bulleted List", "Outline", "Dialogue"]
-LENGTHS = {
-    "Short": (4, 6),
-    "Medium": (7, 11),
-    "Long": (12, 18)
-}
-
+LENGTHS = {"Short": (4, 6), "Medium": (7, 11), "Long": (12, 18)}
 
 # ---------------------------
-# Helper functions
+# Helpers
 # ---------------------------
-def sentence_split(text):
+def sentence_split(text: str):
     parts = [p.strip() for p in text.replace("\n", " ").split(".")]
     return [p for p in parts if p]
-
 
 def clamp(n, a, b):
     return max(a, min(b, n))
 
-
-def creative_variations(base, creativity):
+def creative_variations(base: str, creativity: float) -> str:
     spice_pool = [
         "crisp", "velvet", "luminous", "tactile", "whispering",
         "electric", "quiet", "bold", "nuanced", "sparkling", "grainy", "sleek"
@@ -107,8 +99,7 @@ def creative_variations(base, creativity):
         base += " " + ", ".join(choices) + "."
     return base
 
-
-def stylize(text, fmt):
+def stylize(text: str, fmt: str) -> str:
     if fmt == "Paragraph":
         return textwrap.fill(text, width=90)
     if fmt == "Bulleted List":
@@ -120,13 +111,12 @@ def stylize(text, fmt):
     if fmt == "Dialogue":
         parts = sentence_split(text)
         speakers = ["You", "Bot"]
-        return "\n".join(f"{speakers[i%2]}: {p}." for i, p in enumerate(parts))
+        return "\n".join(f"{speakers[i % 2]}: {p}." for i, p in enumerate(parts))
     return text
 
-
-def apply_constraints(text, extras, fmt):
+def apply_constraints(text: str, extras: dict, fmt: str) -> str:
     if extras.get("no_emojis"):
-        text = ''.join(ch for ch in text if ch.isascii())
+        text = "".join(ch for ch in text if ch.isascii())
     if extras.get("force_bullets") and fmt != "Bulleted List":
         lines = sentence_split(text)
         text = "\n".join(f"• {line}" for line in lines)
@@ -140,12 +130,12 @@ def apply_constraints(text, extras, fmt):
         text += "\n\n→ Try it now and share your next prompt."
     return text
 
-
 def generate_response(role, tone, user_text, fmt, length_label, creativity, extras):
     role_cfg = ROLES.get(role, ROLES["Storyteller"])
     min_s, max_s = LENGTHS.get(length_label, LENGTHS["Medium"])
     target = random.randint(min_s, max_s)
 
+    # seed for stability
     seed_basis = f"{role}|{tone}|{fmt}|{length_label}|{creativity}|{user_text}"
     random.seed(hash(seed_basis) % (2**32))
 
@@ -175,7 +165,6 @@ def generate_response(role, tone, user_text, fmt, length_label, creativity, extr
         sentences.append(add)
 
     text = ". ".join(sentences[:target]) + "."
-
     if extras.get("title"):
         title = f"{role} — {random.choice(['Concept','Draft','Sketch','Cut','Take'])}"
         text = f"{title}\n\n{text}"
@@ -199,51 +188,117 @@ def generate_response(role, tone, user_text, fmt, length_label, creativity, extr
     text = apply_constraints(text, extras, fmt)
     return text
 
-
 # ---------------------------
 # Routes
 # ---------------------------
 @app.route("/")
 def index():
+    # keep HTML ultra-simple; no external files
     html = f"""
-    <!doctype html>
-    <html lang='en'>
-    <head>
-      <meta charset='utf-8'>
-      <title>Role-based Creative Chatbot</title>
-    </head>
-    <body style='font-family:Arial;max-width:800px;margin:40px auto;'>
-      <h1>Role-based Creative Chatbot</h1>
-      <form id='form'>
-        <label>Role:</label>
-        <select id='role'>{''.join(f"<option>{r}</option>" for r in ROLES)}</select><br><br>
-        <label>Tone:</label>
-        <select id='tone'>{''.join(f"<option>{t}</option>" for t in TONES)}</select><br><br>
-        <label>Format:</label>
-        <select id='format'>{''.join(f"<option>{f}</option>" for f in FORMATS)}</select><br><br>
-        <label>Length:</label>
-        <select id='length'><option>Short</option><option selected>Medium</option><option>Long</option></select><br><br>
-        <label>Creativity:</label>
-        <input type='range' id='creativity' min='0' max='1' step='0.05' value='0.5' /><span id='cval'>0.5</span><br><br>
-        <textarea id='prompt' rows='5' cols='70' placeholder='Enter your idea...'></textarea><br><br>
-        <button type='button' onclick='send()'>Generate</button>
-      </form>
-      <pre id='output' style='white-space:pre-wrap;background:#f4f4f4;padding:10px;border-radius:8px;'></pre>
-      <script>
-        const slider=document.getElementById('creativity');
-        const cval=document.getElementById('cval');
-        slider.oninput=()=>cval.textContent=slider.value;
-        async function send(){{
-          const data={{role:role.value,tone:tone.value,format:format.value,length:length.value,creativity:parseFloat(creativity.value),text:prompt.value,extras:{{}}}};
-          const res=await fetch('/chat',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(data)}});
-          const j=await res.json();
-          document.getElementById('output').textContent=j.reply;
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Role-based Creative Chatbot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body style="font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:40px auto;line-height:1.35">
+  <h1>Role-based Creative Chatbot</h1>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <label>Role
+      <select id="role">{''.join(f'<option>{r}</option>' for r in ROLES.keys())}</select>
+    </label>
+    <label>Tone
+      <select id="tone">{''.join(f'<option>{t}</option>' for t in TONES)}</select>
+    </label>
+    <label>Format
+      <select id="fmt">{''.join(f'<option>{f}</option>' for f in FORMATS)}</select>
+    </label>
+    <label>Length
+      <select id="length"><option>Short</option><option selected>Medium</option><option>Long</option></select>
+    </label>
+  </div>
+
+  <label style="display:block;margin-top:10px;">Creativity:
+    <input type="range" id="creativity" min="0" max="1" step="0.05" value="0.5" />
+    <b id="cval">0.5</b>
+  </label>
+
+  <textarea id="prompt" rows="6" style="width:100%;margin-top:10px;" placeholder="Describe what you want..."></textarea>
+
+  <fieldset style="margin-top:10px;">
+    <legend>Extras</legend>
+    <label><input type="checkbox" id="title"> Include title</label>
+    <label><input type="checkbox" id="tldr"> Include TL;DR</label>
+    <label><input type="checkbox" id="ideas3"> Add 3 ideas</label>
+    <label><input type="checkbox" id="next_prompt"> Suggest next prompt</label>
+    <label><input type="checkbox" id="no_emojis"> No emojis</label>
+    <label><input type="checkbox" id="force_bullets"> Force bullets</label>
+    <label><input type="checkbox" id="quote"> Include a quote</label>
+    <label><input type="checkbox" id="cta"> Include a CTA</label>
+  </fieldset>
+
+  <button id="go" style="margin-top:12px;padding:10px 14px;">Generate</button>
+
+  <pre id="out" style="white-space:pre-wrap;background:#f6f8fa;border:1px solid #e1e4e8;border-radius:8px;padding:12px;margin-top:12px;"></pre>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+    const role = el('role');
+    const tone = el('tone');
+    const fmt = el('fmt');
+    const lengthSel = el('length');
+    const creativity = el('creativity');
+    const cval = el('cval');
+    const promptBox = el('prompt');
+    const out = el('out');
+    const go = el('go');
+
+    creativity.addEventListener('input', () => cval.textContent = creativity.value);
+
+    async function generate() {{
+      const payload = {{
+        role: role.value,
+        tone: tone.value,
+        format: fmt.value,
+        length: lengthSel.value,
+        creativity: parseFloat(creativity.value),
+        text: promptBox.value,
+        extras: {{
+          title: el('title').checked,
+          tldr: el('tldr').checked,
+          ideas3: el('ideas3').checked,
+          next_prompt: el('next_prompt').checked,
+          no_emojis: el('no_emojis').checked,
+          force_bullets: el('force_bullets').checked,
+          quote: el('quote').checked,
+          cta: el('cta').checked
         }}
-      </script>
-    </body></html>
+      }};
+      try {{
+        go.disabled = true; go.textContent = 'Generating...';
+        const res = await fetch('/chat', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        out.textContent = data.reply || '(No reply)';
+      }} catch (e) {{
+        out.textContent = 'Request failed. See console for details.';
+        console.error(e);
+      }} finally {{
+        go.disabled = false; go.textContent = 'Generate';
+      }}
+    }}
+
+    go.addEventListener('click', generate);
+  </script>
+</body>
+</html>
     """
     return render_template_string(html)
-
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -262,6 +317,10 @@ def chat():
     reply = generate_response(role, tone, user_text, fmt, length_label, creativity, extras)
     return jsonify({"reply": reply})
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
+    # host=0.0.0.0 便于容器/远程环境访问；debug=False 保证稳定
     app.run(host="0.0.0.0", port=5000, debug=False)
