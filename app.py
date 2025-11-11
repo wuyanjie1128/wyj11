@@ -1,7 +1,3 @@
-# app.py
-# Role-based Creative Chatbot (English version)
-# ✅ Fully self-contained, safe, deployable to Streamlit Cloud
-
 import streamlit as st
 import random
 import textwrap
@@ -15,27 +11,34 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------------------
+# Title and Description
+# ---------------------------
 st.title("🎭 Role-based Creative Chatbot")
-st.caption("Choose a creative role, adjust style options, and generate text instantly — no API required!")
+st.write(
+    "Welcome! This is an interactive chatbot that can take on different creative roles — "
+    "like a screenwriter, poet, marketer, or designer — and generate styled responses. "
+    "No external API required!"
+)
 
 # ---------------------------
 # Role Definitions
 # ---------------------------
 ROLES = {
-    "Screenwriter": "Creates cinematic dialogue and story beats.",
-    "Marketing Strategist": "Writes persuasive copy that drives action.",
+    "Screenwriter": "Writes scenes and dialogues with cinematic pacing.",
+    "Marketing Strategist": "Creates persuasive and catchy campaign ideas.",
     "UX Writer": "Focuses on clarity and user-friendly language.",
-    "Poet": "Uses lyrical rhythm and emotional imagery.",
-    "Sci-Fi Author": "Builds futuristic worlds and imaginative ideas.",
-    "Comedian": "Writes humorous, lighthearted takes on any topic.",
-    "Motivational Coach": "Encourages readers with supportive energy.",
-    "Game Narrative Designer": "Crafts engaging quests and lore elements."
+    "Poet": "Writes lyrical and emotional passages.",
+    "Sci-Fi Author": "Imagines futuristic worlds and technologies.",
+    "Comedian": "Adds humor and witty observations.",
+    "Motivational Coach": "Provides encouragement and focus.",
+    "Game Designer": "Designs lore, quests, and in-game text."
 }
 
 # ---------------------------
-# Sidebar controls
+# Sidebar Controls
 # ---------------------------
-st.sidebar.header("⚙️ Settings")
+st.sidebar.header("⚙️ Chatbot Settings")
 
 role = st.sidebar.selectbox("Choose a Role", list(ROLES.keys()), index=1)
 tone = st.sidebar.selectbox("Tone", ["Neutral", "Friendly", "Inspirational", "Formal", "Playful"], index=2)
@@ -44,59 +47,58 @@ creativity = st.sidebar.slider("Creativity Level", 0.0, 1.0, 0.6, 0.05)
 style = st.sidebar.multiselect(
     "Writing Devices",
     ["Metaphor", "Alliteration", "Rule of Three", "Rhetorical Question", "Sensory Detail"],
-    default=["Metaphor", "Rule of Three"]
+    default=["Metaphor"]
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("Adjust these settings, then enter your prompt below!")
+st.sidebar.info("Adjust the style and tone, then enter your prompt below!")
 
 # ---------------------------
-# Helper functions
+# Helper Functions
 # ---------------------------
 def stylize_text(text: str) -> str:
-    """Add light creative devices to make text livelier."""
+    """Applies creative writing devices for stylistic variation."""
     if "Metaphor" in style and random.random() < creativity:
-        text += " It’s like catching starlight in a jar."
+        text += " It’s like painting with light and shadow."
     if "Alliteration" in style and random.random() < creativity:
-        text = text.replace("strong", "swift and steady")
+        text = text.replace("strong", "steady and sure")
     if "Rule of Three" in style and random.random() < creativity:
-        text += " Balance, rhythm, and resonance."
+        text += " Focus, rhythm, and flow."
     if "Rhetorical Question" in style and random.random() < creativity:
-        text += " What could be more exciting?"
+        text += " What more could inspire creativity?"
     if "Sensory Detail" in style and random.random() < creativity:
-        text += " You can almost feel the warmth behind the words."
+        text += " You can almost feel the spark behind these words."
     return text
 
 def generate_response(role, tone, text, creativity, length):
-    """Fake but elegant text generation logic."""
+    """Generates styled text (no API required)."""
     if not text.strip():
-        return "Please enter a prompt to start the conversation."
+        return "Please enter a prompt to start."
 
-    base_templates = [
+    intro_templates = [
         f"As a {role.lower()}, I'd say:",
-        f"From the {role.lower()}'s perspective:",
-        f"Here's how a {role.lower()} might express that:",
-        f"Through the lens of a {role.lower()}, consider this:"
+        f"From a {role.lower()}'s point of view:",
+        f"Here's how a {role.lower()} might respond:",
     ]
-    intro = random.choice(base_templates)
+    intro = random.choice(intro_templates)
 
     multiplier = {"Short": 2, "Medium": 4, "Long": 6}[length]
     words = text.split()
-    sentence = " ".join(words[: multiplier * 10])
+    body_text = " ".join(words[: multiplier * 10])
 
-    body = f"{sentence.capitalize()} — crafted with a {tone.lower()} tone."
-    final = stylize_text(body)
+    body = f"{body_text.capitalize()} — written in a {tone.lower()} tone."
+    styled = stylize_text(body)
+    wrapped = textwrap.fill(styled, width=90)
 
-    # Wrap lines for nice formatting
-    return textwrap.fill(f"{intro}\n\n{final}", width=90)
+    return f"{intro}\n\n{wrapped}"
 
 # ---------------------------
 # User Input
 # ---------------------------
-st.markdown("### 💬 Enter your prompt")
-prompt = st.text_area("What should I write about?", placeholder="e.g. A story about teamwork in space", height=150)
+st.subheader("💬 Enter your Prompt")
+prompt = st.text_area("What do you want me to write about?", placeholder="e.g. A story about teamwork in space", height=150)
 
-if st.button("✨ Generate Response", type="primary", use_container_width=True):
+if st.button("✨ Generate Response", type="primary"):
     st.subheader(f"🧠 {role}'s Response")
     output = generate_response(role, tone, prompt, creativity, length)
     st.write(output)
@@ -106,7 +108,6 @@ if st.button("✨ Generate Response", type="primary", use_container_width=True):
 # ---------------------------
 st.markdown("---")
 st.caption(
-    "This creative chatbot runs entirely in your browser using Streamlit. "
-    "It does not connect to any external API or store data. "
-    "Feel free to fork and customize it on GitHub!"
+    "This chatbot runs entirely on Streamlit — no external APIs or accounts needed. "
+    "You can deploy it directly from GitHub to Streamlit Cloud."
 )
